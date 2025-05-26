@@ -203,7 +203,11 @@ def main() -> int:
     apps_data = json.loads(apps_json)
     upgradable_apps = [
         app for app in apps_data
-        if not app.get("custom_app", False) and app.get("upgrade_available", False)
+        if (
+            not app.get("custom_app", False)
+            and app.get("upgrade_available", False)
+            and app.get("state") == "RUNNING"
+        )
     ]
     if not upgradable_apps:
         log("No updates available for non-custom applications")

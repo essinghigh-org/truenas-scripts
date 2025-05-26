@@ -4,10 +4,9 @@ import sys
 import json
 import socket
 import datetime
-import subprocess
+from truenas_api_client import Client
 import re
 import time
-from pathlib import Path
 
 
 def log(message: str) -> None:
@@ -106,24 +105,6 @@ def load_config(script_dir: str) -> dict:
     }
 
 
-def run_command(command: str) -> str:
-    """Run a shell command and return its standard output. Logs error if command fails."""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        if e.stderr:
-            log(f"Command error: {e.stderr}")
-        return ""
-
-
 def send_webhook_notification(webhook_url: str, content: str) -> bool:
     """Send notification to a webhook (Discord or Slack)."""
     if not webhook_url:
@@ -139,7 +120,7 @@ def send_webhook_notification(webhook_url: str, content: str) -> bool:
         return False
 
 
-def upgrade_app(app: dict, config: dict, log_content: list, debug_enabled: bool, dry_run: bool) -> None:
+def upgrade_app(app: dict, config: dict, log_content: list, debug_enabled: bool, dry_run: bool, client) -> None:
     """Upgrade a single app if eligible."""
     app_name = app.get("name", "")
     current_version = app.get("version", "")
@@ -159,21 +140,27 @@ def upgrade_app(app: dict, config: dict, log_content: list, debug_enabled: bool,
         new_version = f"{current_version} (dry-run)"
         log_content.append(f"{app_name} | {current_version} → {new_version}")
     else:
-        upgrade_result = run_command(f"midclt call app.upgrade \"{app_name}\"")
-        if upgrade_result is not None:
-            new_version = "unknown"
-            max_attempts = 60
-            attempts = 0
-            while (new_version == "unknown" or new_version == current_version) and attempts < max_attempts:
-                app_config = run_command(f"midclt call app.config \"{app_name}\"")
-                if app_config:
-                    config_data = json.loads(app_config)
-                    new_version = config_data.get("ix_context", {}).get("app_metadata", {}).get("version", "unknown")
-                if new_version == "unknown" or new_version == current_version:
-                    time.sleep(5)
-                    attempts += 1
-            log(f"   - New version:    {new_version}")
-            log_content.append(f"{app_name} | {current_version} → {new_version}")
+        try:
+            client.call("app.upgrade", app_name)
+        except Exception as e:
+            log(f"   - Upgrade failed for {app_name}: {e}")
+            log("-----------------------------------------")
+            return
+        new_version = "unknown"
+        max_attempts = 60
+        attempts = 0
+        while (new_version == "unknown" or new_version == current_version) and attempts < max_attempts:
+            try:
+                config_data = client.call("app.config", app_name)
+                new_version = config_data.get("ix_context", {}).get("app_metadata", {}).get("version", "unknown")
+            except Exception as e:
+                log(f"   - Error fetching new version for {app_name}: {e}")
+                new_version = "unknown"
+            if new_version == "unknown" or new_version == current_version:
+                time.sleep(5)
+                attempts += 1
+        log(f"   - New version:    {new_version}")
+        log_content.append(f"{app_name} | {current_version} → {new_version}")
     log("-----------------------------------------")
 
 
@@ -192,56 +179,60 @@ def main() -> int:
     if debug_enabled:
         log(f"DEBUG: Config loaded - hostname: {hostname}, discord_enabled: {discord_enabled}, slack_enabled: {slack_enabled}, dry_run: {dry_run}")
         log(f"DEBUG: Excluded apps: {excluded_apps}")
-    log("Starting catalog sync...")
-    run_command("midclt call catalog.sync")
-    log("-----------------------------------------")
-    log("Checking for non-custom apps with available upgrades...")
-    apps_json = run_command("midclt call app.query")
-    if not apps_json:
-        log("Failed to query apps")
-        return 1
-    apps_data = json.loads(apps_json)
-    upgradable_apps = [
-        app for app in apps_data
-        if (
-            not app.get("custom_app", False)
-            and app.get("upgrade_available", False)
-            and app.get("state") == "RUNNING"
-        )
-    ]
-    if not upgradable_apps:
-        log("No updates available for non-custom applications")
+    with Client() as client:
+        log("Starting catalog sync...")
+        try:
+            client.call("catalog.sync")
+        except Exception as e:
+            log(f"Catalog sync failed: {e}")
         log("-----------------------------------------")
+        log("Checking for non-custom apps with available upgrades...")
+        try:
+            apps_data = client.call("app.query")
+        except Exception as e:
+            log(f"Failed to query apps: {e}")
+            return 1
+        upgradable_apps = [
+            app for app in apps_data
+            if (
+                not app.get("custom_app", False)
+                and app.get("upgrade_available", False)
+                and app.get("state") == "RUNNING"
+            )
+        ]
+        if not upgradable_apps:
+            log("No updates available for non-custom applications")
+            log("-----------------------------------------")
+            return 0
+        log("Found updates for the following apps:")
+        for app in upgradable_apps:
+            log(f"• {app.get('name', '')} (Current: {app.get('version', '')})")
+        log("-----------------------------------------")
+        total_upgrades = 0
+        log_content = []
+        for app in upgradable_apps:
+            before_count = len(log_content)
+            upgrade_app(app, config, log_content, debug_enabled, dry_run, client)
+            if len(log_content) > before_count:
+                total_upgrades += 1
+        log(f"Successfully upgraded {total_upgrades} app(s)")
+        if total_upgrades > 0:
+            if discord_enabled:
+                message = f"[{hostname}] "
+                if dry_run:
+                    message += f"(Dry Run) Would have upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
+                else:
+                    message += f"Successfully upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
+                send_webhook_notification(discord_webhook, message)
+            if slack_enabled:
+                message = f"[{hostname}] "
+                if dry_run:
+                    message += f"(Dry Run) Would have upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
+                else:
+                    message += f"Successfully upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
+                send_webhook_notification(slack_webhook, message)
+        log("Script execution completed")
         return 0
-    log("Found updates for the following apps:")
-    for app in upgradable_apps:
-        log(f"• {app.get('name', '')} (Current: {app.get('version', '')})")
-    log("-----------------------------------------")
-    total_upgrades = 0
-    log_content = []
-    for app in upgradable_apps:
-        before_count = len(log_content)
-        upgrade_app(app, config, log_content, debug_enabled, dry_run)
-        if len(log_content) > before_count:
-            total_upgrades += 1
-    log(f"Successfully upgraded {total_upgrades} app(s)")
-    if total_upgrades > 0:
-        if discord_enabled:
-            message = f"[{hostname}] "
-            if dry_run:
-                message += f"(Dry Run) Would have upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
-            else:
-                message += f"Successfully upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
-            send_webhook_notification(discord_webhook, message)
-        if slack_enabled:
-            message = f"[{hostname}] "
-            if dry_run:
-                message += f"(Dry Run) Would have upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
-            else:
-                message += f"Successfully upgraded {total_upgrades} app(s):\n" + "\n".join(log_content)
-            send_webhook_notification(slack_webhook, message)
-    log("Script execution completed")
-    return 0
 
 
 if __name__ == "__main__":

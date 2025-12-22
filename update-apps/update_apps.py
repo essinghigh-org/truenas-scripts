@@ -7,6 +7,7 @@ import datetime
 from truenas_api_client import Client
 import re
 import time
+from typing import Any
 
 
 def log(message: str) -> None:
@@ -14,9 +15,9 @@ def log(message: str) -> None:
     print(f"{timestamp} {message}")
 
 
-def parse_toml(config_path: str) -> dict:
+def parse_toml(config_path: str) -> dict[str, Any]:
     """Parser for the TOML config file."""
-    default_config = {
+    default_config: dict[str, Any] = {
         "hostname": socket.gethostname(),
         "discord": {"enabled": False, "webhook_url": ""},
         "slack": {"enabled": False, "webhook_url": ""},
@@ -25,7 +26,7 @@ def parse_toml(config_path: str) -> dict:
     } 
     if not os.path.isfile(config_path):
         return default_config
-    config = {
+    config: dict[str, Any] = {
         "discord": {},
         "slack": {},
         "exclude": {},
@@ -48,7 +49,7 @@ def parse_toml(config_path: str) -> dict:
                     continue
                 if key == "apps" and current_section == "exclude":
                     apps_str = re.sub(r'^\[|\]$', '', value)
-                    apps = []
+                    apps: list[str] = []
                     in_quotes = False
                     current_app = ""
                     for char in apps_str:
@@ -76,7 +77,7 @@ def parse_toml(config_path: str) -> dict:
     return config
 
 
-def load_config(script_dir: str) -> dict:
+def load_config(script_dir: str) -> dict[str, Any]:
     """Load configuration from JSON or convert from TOML if needed."""
     json_config_path = os.path.join(script_dir, "update_apps.json")
     toml_config_path = os.path.join(script_dir, "update_apps.toml")
@@ -120,11 +121,11 @@ def send_webhook_notification(webhook_url: str, content: str) -> bool:
         return False
 
 
-def upgrade_app(app: dict, config: dict, log_content: list, debug_enabled: bool, dry_run: bool, client) -> None:
+def upgrade_app(app: dict[str, Any], config: dict[str, Any], log_content: list[str], debug_enabled: bool, dry_run: bool, client: Any) -> None:
     """Upgrade a single app if eligible."""
-    app_name = app.get("name", "")
-    current_version = app.get("version", "")
-    excluded_apps = config.get("exclude", {}).get("apps", [])
+    app_name: str = app.get("name", "")
+    current_version: str = app.get("version", "")
+    excluded_apps: list[str] = config.get("exclude", {}).get("apps", [])
     if debug_enabled:
         log(f"DEBUG: Checking if app '{app_name}' is in exclude list: {excluded_apps}")
     if app_name in excluded_apps:
@@ -146,12 +147,12 @@ def upgrade_app(app: dict, config: dict, log_content: list, debug_enabled: bool,
             log(f"   - Upgrade failed for {app_name}: {e}")
             log("-----------------------------------------")
             return
-        new_version = "unknown"
+        new_version: str = "unknown"
         max_attempts = 60
         attempts = 0
         while (new_version == "unknown" or new_version == current_version) and attempts < max_attempts:
             try:
-                config_data = client.call("app.config", app_name)
+                config_data: dict[str, Any] = client.call("app.config", app_name)
                 new_version = config_data.get("ix_context", {}).get("app_metadata", {}).get("version", "unknown")
             except Exception as e:
                 log(f"   - Error fetching new version for {app_name}: {e}")
@@ -168,31 +169,31 @@ def main() -> int:
     """Main entry point for the update process."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config = load_config(script_dir)
-    hostname = config.get("hostname", socket.gethostname())
-    debug_enabled = config.get("debug", {}).get("enabled", False)
-    dry_run = config.get("debug", {}).get("dry_run", False)
-    discord_enabled = config.get("discord", {}).get("enabled", False)
-    discord_webhook = config.get("discord", {}).get("webhook_url", "")
-    slack_enabled = config.get("slack", {}).get("enabled", False)
-    slack_webhook = config.get("slack", {}).get("webhook_url", "")
-    excluded_apps = config.get("exclude", {}).get("apps", [])
+    hostname: str = config.get("hostname", socket.gethostname())
+    debug_enabled: bool = config.get("debug", {}).get("enabled", False)
+    dry_run: bool = config.get("debug", {}).get("dry_run", False)
+    discord_enabled: bool = config.get("discord", {}).get("enabled", False)
+    discord_webhook: str = config.get("discord", {}).get("webhook_url", "")
+    slack_enabled: bool = config.get("slack", {}).get("enabled", False)
+    slack_webhook: str = config.get("slack", {}).get("webhook_url", "")
+    excluded_apps: list[str] = config.get("exclude", {}).get("apps", [])
     if debug_enabled:
         log(f"DEBUG: Config loaded - hostname: {hostname}, discord_enabled: {discord_enabled}, slack_enabled: {slack_enabled}, dry_run: {dry_run}")
         log(f"DEBUG: Excluded apps: {excluded_apps}")
     with Client() as client:
         log("Starting catalog sync...")
         try:
-            client.call("catalog.sync")
+            client.call("catalog.sync")  # pyright: ignore[reportUnknownMemberType]
         except Exception as e:
             log(f"Catalog sync failed: {e}")
         log("-----------------------------------------")
         log("Checking for non-custom apps with available upgrades...")
         try:
-            apps_data = client.call("app.query")
+            apps_data: list[dict[str, Any]] = client.call("app.query")  # pyright: ignore[reportAssignmentType,reportUnknownMemberType,reportUnknownVariableType]
         except Exception as e:
             log(f"Failed to query apps: {e}")
             return 1
-        upgradable_apps = [
+        upgradable_apps: list[dict[str, Any]] = [
             app for app in apps_data
             if (
                 not app.get("custom_app", False)
@@ -209,7 +210,7 @@ def main() -> int:
             log(f"• {app.get('name', '')} (Current: {app.get('version', '')})")
         log("-----------------------------------------")
         total_upgrades = 0
-        log_content = []
+        log_content: list[str] = []
         for app in upgradable_apps:
             before_count = len(log_content)
             upgrade_app(app, config, log_content, debug_enabled, dry_run, client)

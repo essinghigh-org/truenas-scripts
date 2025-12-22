@@ -6,6 +6,7 @@ import os
 import sys
 import datetime
 import re
+from typing import Any
 
 """
 Automated TrueNAS configuration backup utility.
@@ -13,7 +14,7 @@ Handles config backup creation via midclt API calls and file download.
 Maintains versioned backups with timestamp and system version metadata.
 """
 
-def check_version_compatibility():
+def check_version_compatibility() -> str:
     """Check if the TrueNAS version is compatible with this script.
     
     Versions above Electric Eel (25.04.0) need to use the websocket variant.
@@ -50,7 +51,7 @@ def check_version_compatibility():
         print(f"Error reading TrueNAS version: {e}")
         return "unknown"
 
-def midclt_runner(call_args):
+def midclt_runner(call_args: list[str]) -> Any:
     """Execute midclt command and handle errors.
     
     Args:
@@ -64,17 +65,19 @@ def midclt_runner(call_args):
     """
     try:
         result = subprocess.check_output(call_args, stderr=subprocess.STDOUT)
-        return json.loads(result)
     except subprocess.CalledProcessError as e:
         print("Error executing command: {}".format(' '.join(call_args)))
         print("Output:", e.output.decode())
         sys.exit(1)
+    
+    try:
+        return json.loads(result)
     except json.JSONDecodeError as e:
         print("JSON decode error. Output was:")
         print(result.decode())
         sys.exit(1)
 
-def main():
+def main() -> None:
     """Main backup execution flow.
     
     1. Parse command line arguments

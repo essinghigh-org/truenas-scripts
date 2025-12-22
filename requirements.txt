@@ -1,2 +1,3 @@
 git+https://github.com/truenas/api_client.git
 requests
+pyopenssl

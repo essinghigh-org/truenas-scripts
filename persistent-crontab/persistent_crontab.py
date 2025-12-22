@@ -10,11 +10,12 @@ import argparse
 import os
 import subprocess
 import sys
+from typing import Any, cast
 from truenas_api_client import Client
 import urllib3
 
 
-def validate_backup_path(backup_path):
+def validate_backup_path(backup_path: str) -> str:
     """
     Validate the backup file path and check if it exists.
     Warn if the path is not in /mnt as it should be stored on a ZFS storage pool.
@@ -33,7 +34,7 @@ def validate_backup_path(backup_path):
     return os.path.abspath(backup_path)
 
 
-def backup_current_crontab(backup_path):
+def backup_current_crontab(backup_path: str) -> None:
     """
     Create a backup of the current crontab configuration.
     """
@@ -56,7 +57,7 @@ def backup_current_crontab(backup_path):
         sys.exit(1)
 
 
-def check_and_create_init_script(backup_path, no_confirm=False):
+def check_and_create_init_script(backup_path: str, no_confirm: bool = False) -> None:
     """
     Check if the crontab restore command already exists as an init script.
     If not, create a new init script to restore the crontab.
@@ -71,12 +72,12 @@ def check_and_create_init_script(backup_path, no_confirm=False):
     try:
         with Client() as client:
             # Query existing init scripts
-            init_scripts = client.call('initshutdownscript.query')
+            init_scripts = cast(list[dict[str, Any]], client.call('initshutdownscript.query'))  # pyright: ignore[reportUnknownMemberType]
             
             # Check if crontab restore command already exists
             for script in init_scripts:
-                if script['type'] == 'COMMAND' and script['command'].startswith('crontab '):
-                    restore_path = script['command'].split(' ')[1]
+                if script['type'] == 'COMMAND' and cast(str, script['command']).startswith('crontab '):
+                    restore_path = cast(str, script['command']).split(' ')[1]
                     
                     if restore_path == backup_path:
                         print(f"Crontab restore command already exists (ID: {script['id']})")
@@ -90,7 +91,7 @@ def check_and_create_init_script(backup_path, no_confirm=False):
                             answer = input("Do you want to update it? (y/n): ")
                         
                         if answer.lower() == 'y':
-                            client.call('initshutdownscript.update', script['id'], {
+                            client.call('initshutdownscript.update', script['id'], {  # pyright: ignore[reportUnknownMemberType]
                                 'command': f"crontab {backup_path}",
                                 'comment': f"Restore crontab from {backup_path}"
                             })
@@ -100,7 +101,7 @@ def check_and_create_init_script(backup_path, no_confirm=False):
                         return
             
             # Create new init script only if no existing crontab restore command was found
-            params = {
+            params: dict[str, Any] = {
                 'type': 'COMMAND',
                 'command': f"crontab {backup_path}",
                 'when': 'POSTINIT',
@@ -109,7 +110,7 @@ def check_and_create_init_script(backup_path, no_confirm=False):
                 'comment': f"Restore crontab from {backup_path}"
             }
             
-            result = client.call('initshutdownscript.create', params)
+            result = cast(dict[str, Any], client.call('initshutdownscript.create', params))  # pyright: ignore[reportUnknownMemberType]
             print(f"Created new init script (ID: {result['id']}) to restore crontab from {backup_path}")
             
     except Exception as e:
@@ -117,7 +118,7 @@ def check_and_create_init_script(backup_path, no_confirm=False):
         sys.exit(1)
 
 
-def main():
+def main() -> None:
     """
     Main function to handle the crontab backup and restoration setup.
     """
